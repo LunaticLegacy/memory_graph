@@ -42,6 +42,7 @@ class ContextManager:
         self.memory_store = MemoryStore()
         self.max_context_nodes = max_context_nodes
         self.pack_keep_recent = pack_keep_recent
+        self.current_turn = 0  # 轮次计数器，用于记忆生命周期管理
 
     @staticmethod
     def _normalize_formula(content: str) -> str:
@@ -187,7 +188,11 @@ class ContextManager:
         selected_node_ids: List[int],
         memory_queries: List[str],
     ) -> List[LLMContext]:
-        """根据 Agent 选择的节点和记忆查询，构建喂给 LLM 的线性上下文。"""
+        """根据 Agent 选择的节点和记忆查询，构建喂给 LLM 的线性上下文。
+
+        记忆注入规则：只有 status == 'committed' 且 turn_id < current_turn 的记忆才能被注入。
+        本轮提取的 candidate 记忆不可用于本轮回答，避免循环论证。
+        """
 
         # 收集选中节点的祖先链（去重）
         all_nids: Set[int] = set()
@@ -202,15 +207,20 @@ class ContextManager:
         sorted_nids = sorted(all_nids)
         result: List[LLMContext] = []
 
-        # 1. 强制注入 pinned memories（所有后续对话都可见）
-        pinned = self.memory_store.get_pinned_memories()
+        # ---- 记忆过滤规则 ----
+        def _can_inject(mem: Any) -> bool:
+            return mem.status == "committed" and mem.turn_id < self.current_turn
+
+        # 1. 强制注入 pinned memories（但仅限已提交的）
+        pinned = [m for m in self.memory_store.get_pinned_memories() if _can_inject(m)]
+        skipped_pinned = [m for m in self.memory_store.get_pinned_memories() if not _can_inject(m)]
 
         # 2. 按需检索非 pinned 记忆
         queried_memories: List[Any] = []
         seen_mem_ids: Set[int] = set(m.id for m in pinned)
         for query in memory_queries:
             for mem in self.memory_store.search_by_text(query):
-                if mem.id not in seen_mem_ids:
+                if mem.id not in seen_mem_ids and _can_inject(mem):
                     seen_mem_ids.add(mem.id)
                     queried_memories.append(mem)
 
@@ -220,11 +230,35 @@ class ContextManager:
                 continue
             for query in memory_queries:
                 if any(query.lower() in t.lower() for t in mem.tags):
-                    seen_mem_ids.add(mem.id)
-                    queried_memories.append(mem)
+                    if _can_inject(mem):
+                        seen_mem_ids.add(mem.id)
+                        queried_memories.append(mem)
                     break
 
-        # 组装记忆 block
+        # 3. 打印注入/跳过报告
+        print("\n[Injected Memories]")
+        if pinned:
+            for m in pinned:
+                print(f"  M{m.id} committed (turn {m.turn_id}) [pinned]: {m.content[:50]}...")
+        if queried_memories:
+            for m in queried_memories:
+                print(f"  M{m.id} committed (turn {m.turn_id}): {m.content[:50]}...")
+        if not pinned and not queried_memories:
+            print("  （本轮无注入记忆）")
+
+        skipped_ids = set(m.id for m in skipped_pinned)
+        for m in self.memory_store.get_all_memories():
+            if m.id not in seen_mem_ids and m.status == "candidate" and m.id not in skipped_ids:
+                skipped_ids.add(m.id)
+        if skipped_ids:
+            print("\n[Skipped Memories]")
+            for mid in sorted(skipped_ids):
+                m = self.memory_store.get_memory(mid)
+                if m:
+                    reason = "本轮提取的 candidate，不可用于本轮回答"
+                    print(f"  M{m.id} {m.status} (turn {m.turn_id}): {m.content[:40]}... ({reason})")
+
+        # 4. 组装记忆 block
         memory_blocks: List[str] = []
         if pinned:
             memory_blocks.append("[Pinned Memory 永久记忆]")
@@ -243,7 +277,7 @@ class ContextManager:
             )
             result.append(LLMContext(role="system", content=mem_block))
 
-        # 3. 注入对话历史
+        # 5. 注入对话历史
         for nid in sorted_nids:
             pair = self.graph.nodes[nid].context
             result.append(pair.user_role)
@@ -286,6 +320,7 @@ class ContextManager:
         }
 
         if auto_plan and self.graph.nodes:
+            self.current_turn += 1
             decision = await self._make_decision(user_message, parent_ids)
             print(f"\n[Agent 决策] {decision.reasoning}")
             applied_ops["selected_nodes"] = decision.selected_node_ids
@@ -296,7 +331,6 @@ class ContextManager:
                 if pack_nid not in self.graph.nodes:
                     continue
 
-                # 智能兜底：如果指定节点的祖先链太短，尝试用当前对话链的最新节点
                 chain = self.graph.get_ancestor_chain(
                     pack_nid, max_nodes=99, strategy="longest"
                 )
@@ -327,11 +361,10 @@ class ContextManager:
                 if summary_id is not None:
                     applied_ops["pack_triggers"].append(pack_nid)
                     applied_ops["summary_nodes"].append(summary_id)
-                    # 实际被压缩的节点 = 摘要节点的 summarized_ids
                     compressed = list(self.graph.nodes[summary_id].summarized_ids)
                     applied_ops["compressed_nodes"].extend(compressed)
 
-            # 2. 提取关键记忆（支持 pinned / packable，自动去重，公式类用 canonical_key）
+            # 2. 提取关键记忆（candidate 状态，本轮不可用）
             existing_contents = {m.content.strip() for m in self.memory_store.get_all_memories()}
             for mem_data in decision.memories_to_extract:
                 content = mem_data.get("content", "").strip()
@@ -345,7 +378,6 @@ class ContextManager:
                     continue
                 existing_contents.add(content)
 
-                # 公式类记忆生成 canonical_key 用于语义去重
                 canonical_key = None
                 if pinned or "公式" in tags:
                     canonical_key = self._normalize_formula(content)
@@ -361,12 +393,14 @@ class ContextManager:
                     pinned=pinned,
                     packable=packable,
                     canonical_key=canonical_key,
+                    turn_id=self.current_turn,
+                    status="candidate",
                 )
                 applied_ops["extracted_memories"].append(mem_id)
                 flag = "[Pinned]" if pinned else ""
-                print(f"[记忆提取] Memory {mem_id} {flag}: {content[:60]}...")
+                print(f"[记忆提取] Memory {mem_id} {flag} (candidate, turn {self.current_turn}): {content[:60]}...")
 
-            # 3. 构建上下文
+            # 3. 构建上下文（本轮 candidate 记忆不会被注入）
             context = self._build_context(
                 decision.selected_node_ids,
                 decision.memory_queries,
@@ -420,7 +454,13 @@ class ContextManager:
             assistant_content += chunk
         print("")
 
-        # 5. 写入 DAG
+        # 5. 本轮回答完成后，提交本轮提取的 candidate 记忆为 committed
+        if auto_plan and self.graph.nodes:
+            committed_ids = self.memory_store.commit_candidates(self.current_turn)
+            if committed_ids:
+                print(f"\n[Post-answer Commit] 本轮 candidate 记忆已提交为 committed: {committed_ids}")
+
+        # 6. 写入 DAG
         node_id = self.graph.add_node(
             LLMContextPair(
                 user_role=LLMContext(role="user", content=user_message),

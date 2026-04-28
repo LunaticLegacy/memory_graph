@@ -17,6 +17,8 @@ class KeyMemory:
     tags: Set[str] = field(default_factory=set)
     pinned: bool = False       # 为 True 时，该记忆会被强制注入所有后续对话的 system prompt
     packable: bool = True      # 为 False 时，该记忆对应的原始上下文不应被压缩
+    status: str = "candidate"  # "committed" | "candidate" | "rejected"
+    turn_id: int = 0           # 创建时的轮次编号
 
 
 class MemoryStore:
@@ -36,6 +38,8 @@ class MemoryStore:
         pinned: bool = False,
         packable: bool = True,
         canonical_key: Optional[str] = None,
+        turn_id: int = 0,
+        status: str = "candidate",
     ) -> int:
         """添加一条关键记忆。
 
@@ -45,7 +49,9 @@ class MemoryStore:
             tags: 检索标签。
             pinned: 是否强制注入所有后续对话。
             packable: 对应的原始上下文是否允许被压缩。
-            canonical_key: 规范化 key，用于去重。如果提供且已存在，则追加来源节点并返回已有 id。
+            canonical_key: 规范化 key，用于去重。
+            turn_id: 创建轮次。
+            status: 初始状态（默认 candidate，回答后由 runtime 提升为 committed）。
 
         Returns:
             记忆 id（新创建或已存在）。
@@ -65,6 +71,8 @@ class MemoryStore:
             tags=set(tags) if tags else set(),
             pinned=pinned,
             packable=packable,
+            status=status,
+            turn_id=turn_id,
         )
         self.memories[mem_id] = memory
 
@@ -79,6 +87,23 @@ class MemoryStore:
     def get_pinned_memories(self) -> List[KeyMemory]:
         """获取所有被标记为 pinned 的记忆。"""
         return [m for m in self.memories.values() if m.pinned]
+
+    def get_committed_memories(self) -> List[KeyMemory]:
+        """获取所有已提交（committed）的记忆。"""
+        return [m for m in self.memories.values() if m.status == "committed"]
+
+    def commit_candidates(self, turn_id: int) -> List[int]:
+        """将指定轮次创建的 candidate 记忆提升为 committed。
+
+        Returns:
+            被提升的记忆 id 列表。
+        """
+        committed_ids: List[int] = []
+        for mem in self.memories.values():
+            if mem.status == "candidate" and mem.turn_id == turn_id:
+                mem.status = "committed"
+                committed_ids.append(mem.id)
+        return committed_ids
 
     def get_memory(self, mem_id: int) -> Optional[KeyMemory]:
         """按 id 获取记忆。"""
