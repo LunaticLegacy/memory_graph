@@ -23,9 +23,14 @@ class LLMContextGraphNode:
     parent_ids: Set[int] = field(default_factory=set)   # 支持多父节点（DAG）
     child_ids: Set[int] = field(default_factory=set)
 
-    # 可选：检索、压缩、摘要时使用
+    # 压缩 / 归档状态
+    is_summary: bool = False                            # 是否为摘要节点
+    archived: bool = False                              # 是否已被摘要覆盖，不再在活跃路径上
+    summarized_by: Set[int] = field(default_factory=set) # 被哪些摘要节点覆盖了
+    summarized_ids: Set[int] = field(default_factory=set) # 本摘要节点覆盖了哪些原始节点
+
+    # 可选：检索、标签
     summary: str = ""
-    summarized_ids: Set[int] = field(default_factory=set)
     tags: Set[str] = field(default_factory=set)
 
 
@@ -343,6 +348,7 @@ class LLMContextGraph:
                 llm_role=LLMContext(role="assistant", content=summary_text),
             ),
             parent_ids=set(first_old.parent_ids),
+            is_summary=True,
             summarized_ids=set(old_ids),
         )
         self.nodes[summary_node_id] = summary_node
@@ -363,5 +369,10 @@ class LLMContextGraph:
                 self.nodes[first_recent_id].parent_ids.add(summary_node_id)
                 self.nodes[last_old_id].child_ids.discard(first_recent_id)
                 self.nodes[summary_node_id].child_ids.add(first_recent_id)
+
+        # 归档：标记被压缩的旧节点
+        for old_id in old_ids:
+            self.nodes[old_id].archived = True
+            self.nodes[old_id].summarized_by.add(summary_node_id)
 
         return summary_node_id

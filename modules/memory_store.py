@@ -15,14 +15,17 @@ class KeyMemory:
     content: str
     source_nodes: Set[int] = field(default_factory=set)
     tags: Set[str] = field(default_factory=set)
+    pinned: bool = False       # 为 True 时，该记忆会被强制注入所有后续对话的 system prompt
+    packable: bool = True      # 为 False 时，该记忆对应的原始上下文不应被压缩
 
 
 class MemoryStore:
-    """关键信息存储库。支持按标签、文本内容检索。"""
+    """关键信息存储库。支持按标签、文本内容检索，支持 canonical key 去重。"""
 
     def __init__(self) -> None:
         self.memories: Dict[int, KeyMemory] = {}
         self._tag_index: Dict[str, Set[int]] = {}
+        self._canonical_index: Dict[str, int] = {}   # canonical_key -> mem_id
         self._next_id = 0
 
     def add_memory(
@@ -30,17 +33,28 @@ class MemoryStore:
         content: str,
         source_nodes: Optional[Set[int]] = None,
         tags: Optional[Set[str]] = None,
+        pinned: bool = False,
+        packable: bool = True,
+        canonical_key: Optional[str] = None,
     ) -> int:
         """添加一条关键记忆。
 
         Args:
-            content: 记忆内容（如公式、重要结论、用户偏好等）。
-            source_nodes: 该记忆来源于哪些上下文节点。
+            content: 记忆内容。
+            source_nodes: 来源上下文节点。
             tags: 检索标签。
+            pinned: 是否强制注入所有后续对话。
+            packable: 对应的原始上下文是否允许被压缩。
+            canonical_key: 规范化 key，用于去重。如果提供且已存在，则追加来源节点并返回已有 id。
 
         Returns:
-            新记忆的 id。
+            记忆 id（新创建或已存在）。
         """
+        if canonical_key and canonical_key in self._canonical_index:
+            existing_id = self._canonical_index[canonical_key]
+            self.memories[existing_id].source_nodes.update(source_nodes or set())
+            return existing_id
+
         mem_id = self._next_id
         self._next_id += 1
 
@@ -49,13 +63,22 @@ class MemoryStore:
             content=content,
             source_nodes=set(source_nodes) if source_nodes else set(),
             tags=set(tags) if tags else set(),
+            pinned=pinned,
+            packable=packable,
         )
         self.memories[mem_id] = memory
 
         for tag in memory.tags:
             self._tag_index.setdefault(tag, set()).add(mem_id)
 
+        if canonical_key:
+            self._canonical_index[canonical_key] = mem_id
+
         return mem_id
+
+    def get_pinned_memories(self) -> List[KeyMemory]:
+        """获取所有被标记为 pinned 的记忆。"""
+        return [m for m in self.memories.values() if m.pinned]
 
     def get_memory(self, mem_id: int) -> Optional[KeyMemory]:
         """按 id 获取记忆。"""

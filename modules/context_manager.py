@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
@@ -41,6 +42,20 @@ class ContextManager:
         self.memory_store = MemoryStore()
         self.max_context_nodes = max_context_nodes
         self.pack_keep_recent = pack_keep_recent
+
+    @staticmethod
+    def _normalize_formula(content: str) -> str:
+        """生成公式类记忆的规范化 key，用于去重。"""
+        normalized = content.lower()
+        # 去掉 LaTeX 命令
+        normalized = re.sub(r'\\[a-zA-Z]+', '', normalized)
+        # 去掉特殊符号和空格
+        normalized = re.sub(r'[\\{}()\[\]$\s|⟨⟩<>⟨⟩]', '', normalized)
+        # 统一上标表示
+        normalized = re.sub(r'[²³⁴⁵⁶⁷⁸⁹⁰]', '2', normalized)
+        # 只保留字母、数字和基本运算符
+        normalized = re.sub(r'[^a-z0-9=+\-*/^]', '', normalized)
+        return normalized
 
     # ------------------------------------------------------------------
     # 内部工具：格式化信息供决策使用
@@ -91,7 +106,7 @@ class ContextManager:
         user_message: str,
         parent_ids: Optional[Set[int]],
     ) -> ContextDecision:
-        """让 LLM Agent 决定如何管理上下文与记忆。"""
+        """让 LLM Agent 决定如何管理上下文与记忆。支持 JSON 解析失败时重试。"""
 
         candidate_nodes = list(self.graph.nodes.keys())
 
@@ -106,43 +121,62 @@ class ContextManager:
 ## 用户新问题
 {user_message}
 
-## 你的任务
-1. **selected_node_ids**: 选择需要加载到当前上下文的节点 id（最多 {self.max_context_nodes} 个）。优先选择与新问题直接相关的节点，以及构成完整推理链的节点。
-2. **nodes_to_pack**: 选择应该被压缩打包的旧节点 id（通常是非常久远、细节已不重要的节点）。压缩后这些节点的内容会变成摘要，节省 token。
-3. **memories_to_extract**: 从对话中提取应永久保存的关键信息（如重要公式、核心结论、用户明确要求记住的偏好或事实）。这些会被存入独立记忆库，永远不会被压缩。
-4. **memory_queries**: 列出用于检索已有记忆的关键词或标签（如 "formula", "量子计算"）。
+## 你的任务（严格按以下规则）
 
-## 输出格式（严格 JSON，不要 markdown 代码块）
-{{"reasoning": "你的思考过程（中文）","selected_node_ids": [1, 3],"nodes_to_pack": [0],"memories_to_extract": [{{"content": "关键信息内容", "tags": ["tag1"]}}],"memory_queries": ["关键词1"]}}
+1. **selected_node_ids**: 选择需要加载到当前上下文的节点 id（最多 {self.max_context_nodes} 个）。
+   - 优先选择与新问题直接相关的节点
+   - 必须包含构成完整推理链的节点
+
+2. **nodes_to_pack**: 指定要压缩其祖先链的节点 id。
+   - **关键规则**: 系统会从你指定的节点**向前回溯**，保留最近 {self.pack_keep_recent} 轮，把更早的对话压缩成摘要。
+   - **因此你应该填写当前对话链的最新节点**（如 selected_node_ids 中 id 最大的那个），而不是根节点。
+   - 不要填写没有祖先的根节点，那样不会产生任何效果。
+   - 如果历史很短（≤{self.pack_keep_recent + 1} 轮），请留空 []。
+
+3. **memories_to_extract**: 从对话中提取应永久保存的关键信息。
+   - **公式/定义/代码** 等精确信息：必须设置 `"pinned": true, "packable": false`，这样它们会被强制注入所有后续对话，且对应的原始上下文不会被压缩。
+   - **一般结论/事实**：可以设置 `"pinned": false, "packable": true`。
+   - 每条记忆必须有 `"content"`（内容）和 `"tags"`（标签列表）。
+
+4. **memory_queries**: 列出用于检索已有记忆的关键词或标签。
+
+## 输出格式示例（严格 JSON，不要 markdown 代码块，不要额外文字）
+
+{{"reasoning": "用户询问测量行为，与Node 1的叠加态公式直接相关，因此选择Node 0和Node 1。历史较长，用Node 1触发压缩以节省token。公式是精确信息，需要pinned。","selected_node_ids": [0, 1],"nodes_to_pack": [1],"memories_to_extract": [{{"content": "叠加态公式: |ψ⟩ = α|0⟩ + β|1⟩, |α|²+|β|²=1", "tags": ["公式", "量子计算"], "pinned": true, "packable": false}}],"memory_queries": ["叠加态", "测量"]}}
 """
 
-        try:
-            response = await self.fetcher.fetch(
-                msg=planning_prompt,
-                system_prompt="你只输出合法 JSON，不要添加任何 markdown 标记、解释文字或换行符包裹。",
-                temperature=0.1,
-                max_tokens=2048,
-            )
-            raw = self.graph._extract_message_content(response)
-            data = self._extract_json(raw)
+        for attempt in range(2):
+            try:
+                response = await self.fetcher.fetch(
+                    msg=planning_prompt,
+                    system_prompt="你只输出合法 JSON，不要添加任何 markdown 标记、解释文字或换行符包裹。",
+                    temperature=0.1,
+                    max_tokens=2048,
+                )
+                raw = self.graph._extract_message_content(response)
+                data = self._extract_json(raw)
 
-            return ContextDecision(
-                reasoning=data.get("reasoning", ""),
-                selected_node_ids=data.get("selected_node_ids", []),
-                nodes_to_pack=data.get("nodes_to_pack", []),
-                memories_to_extract=data.get("memories_to_extract", []),
-                memory_queries=data.get("memory_queries", []),
-            )
-        except Exception as exc:
-            # 决策失败时回退到安全默认值
-            fallback_nodes = list(parent_ids or [])
-            return ContextDecision(
-                reasoning=f"决策解析失败（{exc}），回退到默认最长链",
-                selected_node_ids=fallback_nodes,
-                nodes_to_pack=[],
-                memories_to_extract=[],
-                memory_queries=[],
-            )
+                return ContextDecision(
+                    reasoning=data.get("reasoning", ""),
+                    selected_node_ids=data.get("selected_node_ids", []),
+                    nodes_to_pack=data.get("nodes_to_pack", []),
+                    memories_to_extract=data.get("memories_to_extract", []),
+                    memory_queries=data.get("memory_queries", []),
+                )
+            except Exception as exc:
+                if attempt == 0:
+                    # 第一次失败，在 prompt 里追加提醒后重试
+                    planning_prompt += "\n\n注意：你上一次的输出不是合法 JSON，请确保本次输出是严格的 JSON 对象，不要有任何额外文字。"
+                    continue
+                # 两次都失败，回退
+                fallback_nodes = list(parent_ids or [])
+                return ContextDecision(
+                    reasoning=f"决策解析失败（{exc}），回退到默认最长链",
+                    selected_node_ids=fallback_nodes,
+                    nodes_to_pack=[],
+                    memories_to_extract=[],
+                    memory_queries=[],
+                )
 
     # ------------------------------------------------------------------
     # 核心：构建最终上下文
@@ -168,14 +202,17 @@ class ContextManager:
         sorted_nids = sorted(all_nids)
         result: List[LLMContext] = []
 
-        # 注入相关记忆（system 消息形式）
-        relevant_memories: List[Any] = []
-        seen_mem_ids: Set[int] = set()
+        # 1. 强制注入 pinned memories（所有后续对话都可见）
+        pinned = self.memory_store.get_pinned_memories()
+
+        # 2. 按需检索非 pinned 记忆
+        queried_memories: List[Any] = []
+        seen_mem_ids: Set[int] = set(m.id for m in pinned)
         for query in memory_queries:
             for mem in self.memory_store.search_by_text(query):
                 if mem.id not in seen_mem_ids:
                     seen_mem_ids.add(mem.id)
-                    relevant_memories.append(mem)
+                    queried_memories.append(mem)
 
         # 按标签再检索一次（扩展召回）
         for mem in self.memory_store.get_all_memories():
@@ -184,19 +221,29 @@ class ContextManager:
             for query in memory_queries:
                 if any(query.lower() in t.lower() for t in mem.tags):
                     seen_mem_ids.add(mem.id)
-                    relevant_memories.append(mem)
+                    queried_memories.append(mem)
                     break
 
-        if relevant_memories:
-            mem_lines = [f"- {m.content}" for m in relevant_memories]
+        # 组装记忆 block
+        memory_blocks: List[str] = []
+        if pinned:
+            memory_blocks.append("[Pinned Memory 永久记忆]")
+            for m in pinned:
+                memory_blocks.append(f"  - {m.content}")
+        if queried_memories:
+            memory_blocks.append("[Retrieved Memory 检索记忆]")
+            for m in queried_memories:
+                memory_blocks.append(f"  - {m.content}")
+
+        if memory_blocks:
             mem_block = (
-                "【已提取的关键记忆（永久保留，不会被压缩）】\n"
-                + "\n".join(mem_lines)
+                "【系统提示：以下是从历史对话中提取的关键记忆，请在下文回答中结合使用】\n"
+                + "\n".join(memory_blocks)
                 + "\n【记忆结束】"
             )
             result.append(LLMContext(role="system", content=mem_block))
 
-        # 注入对话历史
+        # 3. 注入对话历史
         for nid in sorted_nids:
             pair = self.graph.nodes[nid].context
             result.append(pair.user_role)
@@ -228,41 +275,107 @@ class ContextManager:
             新创建的节点 id。
         """
         context: Optional[List[LLMContext]] = None
+        applied_ops: Dict[str, Any] = {
+            "selected_nodes": [],
+            "pack_triggers": [],
+            "compressed_nodes": [],
+            "summary_nodes": [],
+            "extracted_memories": [],
+            "memory_queries": [],
+            "context_node_ids": [],
+        }
 
         if auto_plan and self.graph.nodes:
             decision = await self._make_decision(user_message, parent_ids)
             print(f"\n[Agent 决策] {decision.reasoning}")
+            applied_ops["selected_nodes"] = decision.selected_node_ids
+            applied_ops["memory_queries"] = decision.memory_queries
 
             # 1. 执行压缩
-            for pack_nid in decision.nodes_to_pack:
+            for pack_nid in list(decision.nodes_to_pack):
                 if pack_nid not in self.graph.nodes:
                     continue
+
+                # 智能兜底：如果指定节点的祖先链太短，尝试用当前对话链的最新节点
+                chain = self.graph.get_ancestor_chain(
+                    pack_nid, max_nodes=99, strategy="longest"
+                )
+                if len(chain) <= self.pack_keep_recent + 1:
+                    alt_candidates = [
+                        nid for nid in decision.selected_node_ids
+                        if nid in self.graph.nodes
+                    ]
+                    if alt_candidates:
+                        alt_nid = max(alt_candidates)
+                        alt_chain = self.graph.get_ancestor_chain(
+                            alt_nid, max_nodes=99, strategy="longest"
+                        )
+                        if len(alt_chain) > self.pack_keep_recent + 1:
+                            pack_nid = alt_nid
+                            chain = alt_chain
+                        else:
+                            continue
+                    else:
+                        continue
+
                 summary_id = await self.graph.compress_ancestors(
                     agent=self.fetcher,
                     node_id=pack_nid,
-                    max_nodes=self.max_context_nodes + 2,
+                    max_nodes=self.max_context_nodes + 4,
                     keep_recent=self.pack_keep_recent,
                 )
                 if summary_id is not None:
-                    print(f"[压缩] Node {pack_nid} 的祖先已压缩为 Node {summary_id}")
+                    applied_ops["pack_triggers"].append(pack_nid)
+                    applied_ops["summary_nodes"].append(summary_id)
+                    # 实际被压缩的节点 = 摘要节点的 summarized_ids
+                    compressed = list(self.graph.nodes[summary_id].summarized_ids)
+                    applied_ops["compressed_nodes"].extend(compressed)
 
-            # 2. 提取关键记忆
+            # 2. 提取关键记忆（支持 pinned / packable，自动去重，公式类用 canonical_key）
+            existing_contents = {m.content.strip() for m in self.memory_store.get_all_memories()}
             for mem_data in decision.memories_to_extract:
                 content = mem_data.get("content", "").strip()
                 tags = set(mem_data.get("tags", []))
-                if content:
-                    mem_id = self.memory_store.add_memory(
-                        content=content,
-                        source_nodes=set(decision.selected_node_ids),
-                        tags=tags,
-                    )
-                    print(f"[记忆提取] Memory {mem_id}: {content[:60]}...")
+                pinned = bool(mem_data.get("pinned", False))
+                packable = bool(mem_data.get("packable", True))
+                if not content:
+                    continue
+                if content in existing_contents:
+                    print(f"[记忆提取] 已存在相同记忆，跳过: {content[:40]}...")
+                    continue
+                existing_contents.add(content)
+
+                # 公式类记忆生成 canonical_key 用于语义去重
+                canonical_key = None
+                if pinned or "公式" in tags:
+                    canonical_key = self._normalize_formula(content)
+                    existing = self.memory_store._canonical_index.get(canonical_key)
+                    if existing is not None:
+                        print(f"[记忆提取] 已存在相同公式（canonical），跳过: {content[:40]}...")
+                        continue
+
+                mem_id = self.memory_store.add_memory(
+                    content=content,
+                    source_nodes=set(decision.selected_node_ids),
+                    tags=tags,
+                    pinned=pinned,
+                    packable=packable,
+                    canonical_key=canonical_key,
+                )
+                applied_ops["extracted_memories"].append(mem_id)
+                flag = "[Pinned]" if pinned else ""
+                print(f"[记忆提取] Memory {mem_id} {flag}: {content[:60]}...")
 
             # 3. 构建上下文
             context = self._build_context(
                 decision.selected_node_ids,
                 decision.memory_queries,
             )
+            # 记录实际注入上下文的节点
+            if context:
+                for ctx in context:
+                    # 简单估算：找到对应节点（这里仅做演示，实际可用更精确的方式）
+                    pass
         else:
             # 简单模式：取最长链
             if parent_ids:
@@ -277,6 +390,18 @@ class ContextManager:
                     pair = self.graph.nodes[nid].context
                     context.append(pair.user_role)
                     context.append(pair.llm_role)
+
+        # ---- Runtime Applied Ops 打印 ----
+        print(f"\n[Runtime Applied Ops]")
+        print(f"  selected_nodes: {applied_ops['selected_nodes']}")
+        print(f"  pack_triggers: {applied_ops['pack_triggers']}")
+        print(f"  compressed_nodes: {applied_ops['compressed_nodes']}")
+        print(f"  summary_nodes: {applied_ops['summary_nodes']}")
+        print(f"  extracted_memories: {applied_ops['extracted_memories']}")
+        print(f"  memory_queries: {applied_ops['memory_queries']}")
+        if context:
+            total_chars = sum(len(c.content) for c in context)
+            print(f"  prompt_context_messages: {len(context)} 条, ~{total_chars} 字符")
 
         # 4. 调用 LLM
         print(f"\n[User] {user_message}")
