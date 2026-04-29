@@ -13,4 +13,5 @@ from .llm_context import (
 )
 
 from .agent import Agent
-
+from .tool import Tool, ToolRegistry
+from .thinking_graph_tools import create_thinking_graph_tools
