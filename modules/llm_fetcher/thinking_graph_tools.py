@@ -11,6 +11,8 @@ def create_thinking_graph_tools(graph: ThinkingGraph) -> List[Tool]:
     将 ThinkingGraph 的核心操作封装为一组 Tool。
     Agent 可以通过 tool_call 间接操作图，无需直接耦合 ThinkingGraph。
 
+    所有 handler 均通过 **kwargs 接收参数，确保工具调用统一使用参数字典解析。
+
     Args:
         graph: 要操作的 ThinkingGraph 实例。
 
@@ -18,46 +20,38 @@ def create_thinking_graph_tools(graph: ThinkingGraph) -> List[Tool]:
         Tool 列表，可直接传入 Agent(tools=...)。
     """
 
-    async def _add_node(
-        node_type: str,
-        info: str,
-        tags: Optional[List[str]] = None,
-        confidence: float = 1.0,
-        description: str = "",
-        payload: Optional[Dict[str, Any]] = None,
-    ) -> int:
+    async def _add_node(**kwargs: Any) -> int:
+        """添加节点。参数通过 kwargs 字典解析。"""
         return await graph.add_node(
-            node_type=ThinkingNodeType(node_type),
-            info=info,
-            tags=tags or [],
-            confidence=confidence,
-            description=description,
-            payload=payload or {},
+            node_type=ThinkingNodeType(kwargs["node_type"]),
+            info=kwargs["info"],
+            tags=kwargs.get("tags") or [],
+            confidence=kwargs.get("confidence", 1.0),
+            description=kwargs.get("description", ""),
+            payload=kwargs.get("payload") or {},
         )
 
-    async def _add_edge(
-        edge_type: str,
-        source_id: int,
-        target_id: int,
-        strength: float = 1.0,
-        description: str = "",
-    ) -> int:
+    async def _add_edge(**kwargs: Any) -> int:
+        """添加边。参数通过 kwargs 字典解析。"""
         return await graph.add_edge(
-            edge_type=ThinkingEdgeType(edge_type),
-            source_id=source_id,
-            target_id=target_id,
-            strength=strength,
-            description=description,
+            edge_type=ThinkingEdgeType(kwargs["edge_type"]),
+            source_id=kwargs["source_id"],
+            target_id=kwargs["target_id"],
+            strength=kwargs.get("strength", 1.0),
+            description=kwargs.get("description", ""),
         )
 
-    async def _validate_context(
-        node_id: int,
-        max_hops: int = 1,
-    ) -> str:
-        await graph.validate_incremental_context(node_id, max_hops)
-        return f"Local context around node {node_id} is valid."
+    async def _validate_context(**kwargs: Any) -> str:
+        """验证局部上下文。参数通过 kwargs 字典解析。"""
+        await graph.validate_incremental_context(
+            kwargs["node_id"],
+            kwargs.get("max_hops", 1),
+        )
+        return f"Local context around node {kwargs['node_id']} is valid."
 
-    async def _get_node_info(node_id: int) -> str:
+    async def _get_node_info(**kwargs: Any) -> str:
+        """获取节点信息。参数通过 kwargs 字典解析。"""
+        node_id = kwargs["node_id"]
         if node_id not in graph.node_dict:
             return f"Node {node_id} not found."
         node = graph.node_dict[node_id]

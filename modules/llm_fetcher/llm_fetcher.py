@@ -71,6 +71,7 @@ class LLMFetcher:
             timeout: 旧接口模式下的默认超时时间，单位为秒。
             backends: 多后端模式下的后端配置列表。
             default_backend: 多后端模式下的默认后端名称。
+            limiter: 用于限制速率的接口。
 
         Raises:
             ValueError: 当没有提供有效的构造参数，或默认后端名称不存在时抛出。
@@ -439,14 +440,19 @@ class LLMFetcher:
         messages = self._build_messages(msg, prev_messages=prev_messages, system_prompt=system_prompt)
         backend_errors: List[str] = []
 
+        # 如果被限制则执行该限制。
         if self.limiter:
             await self.limiter.acquire_llm()
         try:
+            # 对被解析的每一个后端：
             for backend in self._resolve_backends(backend_name, fallback_order):
+                # 重试次数
                 retries_left = self._timeout_retry_count(backend)
                 while True:
+                    # 一个用于流式响应的信息。
                     yielded_any = False
                     try:
+                        # 创建补全请求。
                         response = self._create_completion(
                             backend,
                             messages=messages,
@@ -455,12 +461,17 @@ class LLMFetcher:
                             stream=True,
                             tools=tools,
                         )
+                        # 响应流式内容。
                         for text in self._iter_stream_text(response, output_reasoning=output_reasoning):
                             yielded_any = True
                             yield text
                         return
+                    
+                    # 出错的场合：
                     except Exception as exc:
+                        # 判断错误类型
                         normalized_error = self._normalize_exception(backend, exc)
+                        # 再来一次
                         if isinstance(normalized_error, LLMTimeoutError) and not yielded_any and retries_left > 0:
                             retries_left -= 1
                             await asyncio.sleep(min(1.5, 0.25 * (self._timeout_retry_count(backend) - retries_left)))
@@ -472,6 +483,7 @@ class LLMFetcher:
 
             raise LLMBackendError("; ".join(backend_errors))
         finally:
+            # 最后松开 llm 的东西。
             if self.limiter:
                 self.limiter.release_llm()
 

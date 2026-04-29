@@ -38,13 +38,13 @@ class ThinkingEdgeType(str, Enum):
     OBSERVES = "observes"              # A 观察 / 验证 B
 
 
-@dataclass
+@dataclass(kw_only=True)
 class ThinkingGraphObject:
     id: int                         # object ID
     created_by: str                 # 创建者
-    description: str                # 描述
+    description: str = ""           # 描述
 
-@dataclass
+@dataclass(kw_only=True)
 class ThinkingGraphNode(ThinkingGraphObject):
     node_type: ThinkingNodeType     # 类型
     info: str                       # 信息
@@ -52,7 +52,7 @@ class ThinkingGraphNode(ThinkingGraphObject):
     confidence: float               # 置信度
     payload: Dict[str, Any]         # 额外信息
 
-@dataclass
+@dataclass(kw_only=True)
 class ThinkingGraphEdge(ThinkingGraphObject):
     edge_type: ThinkingEdgeType     # 类型
     source_id: int                   # 起始 ID
@@ -370,6 +370,7 @@ class ThinkingGraph:
         tags: Optional[List[str]] = None,
         created_by: str = "system",
         confidence: float = 1.0,
+        description: str = "",
         payload: Optional[Dict[str, Any]] = None,
     ) -> int:
         """
@@ -380,7 +381,8 @@ class ThinkingGraph:
             info: 加入的节点信息。
             tags: 加入的节点标签。
             created_by: 创建者。
-            description: 边缘描述。
+            confidence: 置信度。
+            description: 节点描述。
             payload: 额外信息。
         """
         # 保证信息不得为空。
@@ -403,6 +405,7 @@ class ThinkingGraph:
                 tags=list(tags or []),
                 created_by=created_by,
                 confidence=max(0.0, min(1.0, confidence)),
+                description=description,
                 payload=dict(payload or {}),
             )
 
@@ -484,7 +487,6 @@ class ThinkingGraph:
             source_id=source_id,
             target_id=target_id,
             created_by=created_by,
-            description=description,
             strength=max(0.0, min(1.0, strength)),
         )
         
@@ -527,7 +529,6 @@ class ThinkingGraph:
             source_id: 源节点。
             target_id: 目标节点。
             created_by: 创建者。
-            description: 边缘描述。
             strength: 连接力度。
         """
         if not isinstance(edge_type, ThinkingEdgeType):
