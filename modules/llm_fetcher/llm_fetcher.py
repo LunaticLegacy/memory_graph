@@ -2,20 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional, Sequence, TYPE_CHECKING
+from typing import AsyncGenerator, Dict, Iterable, List, Optional, Protocol, Sequence, TYPE_CHECKING, Union
 
 if TYPE_CHECKING:  # pragma: no cover - imported only for static analysis
     from openai import OpenAI
     from openai.types.chat import ChatCompletion
-
-
-@dataclass
-class LLMContext:
-    """One chat message carried into a backend request."""
-
-    role: str
-    content: str
-
 
 @dataclass
 class LLMBackendConfig:
@@ -28,7 +19,14 @@ class LLMBackendConfig:
     api_url: Optional[str] = None
     timeout: float = 60.0
     max_retries: int = 0
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: Dict[str, object] = field(default_factory=dict)
+
+
+class Limiter(Protocol):
+    """Protocol for rate limiters used by LLMFetcher."""
+
+    async def acquire_llm(self) -> None: ...
+    def release_llm(self) -> None: ...
 
 
 class LLMError(RuntimeError):
@@ -56,7 +54,7 @@ class LLMFetcher:
         timeout: float = 60.0,
         backends: Optional[Sequence[LLMBackendConfig]] = None,
         default_backend: Optional[str] = None,
-        limiter: Optional[Any] = None,
+        limiter: Optional[Limiter] = None,
     ) -> None:
         """初始化 LLM 管理器。
 
@@ -79,7 +77,7 @@ class LLMFetcher:
         """
         self.backends: Dict[str, LLMBackendConfig] = {}
         self.backend_order: List[str] = []
-        self.openai_clients: Dict[str, Any] = {}
+        self.openai_clients: Dict[str, "OpenAI"] = {}
 
         if backends:
             for backend in backends:
@@ -163,14 +161,14 @@ class LLMFetcher:
     def _build_messages(
         self,
         msg: str,
-        prev_messages: Optional[List[LLMContext]] = None,
+        prev_messages: Optional[List[Dict[str, str]]] = None,
         system_prompt: Optional[str] = None,
     ) -> List[Dict[str, str]]:
         """构造发送给后端的消息列表。
 
         Args:
             msg: 当前轮用户输入。
-            prev_messages: 需要拼接的历史上下文。
+            prev_messages: 需要拼接的历史上下文，每条消息为包含 "role" 和 "content" 的字典。
             system_prompt: 当前请求使用的系统提示词。
 
         Returns:
@@ -180,7 +178,7 @@ class LLMFetcher:
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         if prev_messages:
-            messages.extend({"role": item.role, "content": item.content} for item in prev_messages)
+            messages.extend(prev_messages)
         messages.append({"role": "user", "content": msg})
         return messages
 
@@ -192,8 +190,8 @@ class LLMFetcher:
         temperature: float,
         max_tokens: int,
         stream: bool,
-        tools: Optional[List[Dict[str, Any]]] = None,
-    ) -> Any:
+        tools: Optional[List[Dict[str, object]]] = None,
+    ) -> Union[ChatCompletion, Iterable[object]]:
         """向具体后端发起补全请求。
 
         Args:
@@ -212,7 +210,7 @@ class LLMFetcher:
         """
         if backend.provider == "openai":
             client = self.openai_clients[backend.name]
-            kwargs: Dict[str, Any] = {
+            kwargs: Dict[str, object] = {
                 "model": backend.model,
                 "messages": messages,
                 "max_tokens": max_tokens,
@@ -233,7 +231,7 @@ class LLMFetcher:
                 raise ValueError(
                     "litellm provider requires the 'litellm' package to be installed."
                 ) from exc
-            kwargs: Dict[str, Any] = {
+            kwargs: Dict[str, object] = {
                 "model": backend.model,
                 "messages": messages,
                 "max_tokens": max_tokens,
@@ -270,7 +268,7 @@ class LLMFetcher:
         """Return how many retries to allow for timeout failures on one backend."""
         return max(1, int(backend.max_retries))
 
-    def _extract_content(self, delta: Any) -> Optional[str]:
+    def _extract_content(self, delta: object) -> Optional[str]:
         """从流式增量中提取正文内容。
 
         Args:
@@ -285,7 +283,7 @@ class LLMFetcher:
             return delta.get("content")
         return getattr(delta, "content", None)
 
-    def _extract_reasoning(self, delta: Any) -> Optional[str]:
+    def _extract_reasoning(self, delta: object) -> Optional[str]:
         """从流式增量中提取推理内容。
 
         Args:
@@ -302,7 +300,7 @@ class LLMFetcher:
 
     def _iter_stream_text(
         self,
-        response: Iterable[Any],
+        response: Iterable[object],
         *,
         output_reasoning: bool,
     ) -> Iterable[str]:
@@ -350,11 +348,11 @@ class LLMFetcher:
         system_prompt: Optional[str] = None,
         temperature: float = 0.4,
         max_tokens: int = 4096,
-        prev_messages: Optional[List[LLMContext]] = None,
+        prev_messages: Optional[List[Dict[str, str]]] = None,
         backend_name: Optional[str] = None,
         fallback_order: Optional[Sequence[str]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-    ) -> Any:
+        tools: Optional[List[Dict[str, object]]] = None,
+    ) -> ChatCompletion:
         """执行一次非流式请求，并按顺序尝试后端回退。
 
         Args:
@@ -409,14 +407,14 @@ class LLMFetcher:
     async def fetch_stream(
         self,
         msg: str,
-        prev_messages: Optional[List[LLMContext]] = None,
+        prev_messages: Optional[List[Dict[str, str]]] = None,
         system_prompt: Optional[str] = None,
         temperature: float = 0.4,
         max_tokens: int = 4096,
         output_reasoning: bool = False,
         backend_name: Optional[str] = None,
         fallback_order: Optional[Sequence[str]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
+        tools: Optional[List[Dict[str, object]]] = None,
     ) -> AsyncGenerator[str, None]:
         """执行一次流式请求，并按顺序尝试后端回退。
 
