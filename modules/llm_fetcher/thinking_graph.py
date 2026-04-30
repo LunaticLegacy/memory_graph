@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Dict, Tuple, Set, Optional, Any
@@ -320,7 +321,34 @@ class ThinkingGraph:
         输出当前图版本。
         """
         return self._version
-    
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        将图全量序列化为字典。
+        包含所有节点和边的完整字段。
+        """
+        return {
+            "nodes": {
+                nid: dataclasses.asdict(node)
+                for nid, node in self.node_dict.items()
+            },
+            "edges": {
+                eid: dataclasses.asdict(edge)
+                for eid, edge in self.edge_dict.items()
+            },
+            "version": self._version,
+            "node_count": len(self.node_dict),
+            "edge_count": len(self.edge_dict),
+        }
+
+    async def get_full_graph(self) -> Dict[str, Any]:
+        """
+        全量读取图（线程安全）。
+        返回包含所有节点、边及元信息的字典。
+        """
+        async with self._lock:
+            return self.to_dict()
+
     @staticmethod
     def validate_edge_schema() -> None:
         """
@@ -473,6 +501,8 @@ class ThinkingGraph:
     ) -> int:
         """
         加入新连接。
+        在写入前会检查 (source_type, target_type) 是否被 edge_type 的 schema 允许，
+        不合法则直接拒绝，避免脏边进入图中。
 
         Args:
             edge_type: 连接关系类型。
@@ -489,9 +519,29 @@ class ThinkingGraph:
             created_by=created_by,
             strength=max(0.0, min(1.0, strength)),
         )
-        
+
         # 开始写入，上锁。
         async with self._lock:
+            source_node = self.node_dict.get(source_id)
+            target_node = self.node_dict.get(target_id)
+
+            if source_node is None:
+                raise KeyError(f"Source node {source_id} does not exist.")
+            if target_node is None:
+                raise KeyError(f"Target node {target_id} does not exist.")
+
+            # 创建前检查 schema，避免脏边入图
+            if not await self._is_edge_allowed(
+                edge_type=edge_type,
+                source_type=source_node.node_type,
+                target_type=target_node.node_type,
+            ):
+                raise ValueError(
+                    f"Invalid edge schema: "
+                    f"{source_node.node_type.value} -[{edge_type.value}]-> "
+                    f"{target_node.node_type.value}"
+                )
+
             edge_id = self._alloc_id()
             edge = ThinkingGraphEdge(
                 id=edge_id,
@@ -502,13 +552,8 @@ class ThinkingGraph:
                 description=description,
                 strength=max(0.0, min(1.0, strength)),
             )
-            # 添加边缘。
             self.edge_dict[edge_id] = edge
             self._version += 1
-
-            # 增量检查：验证该边两端节点的局部上下文。
-            await self.validate_incremental_context(center_id=source_id, max_hops=1)
-            await self.validate_incremental_context(center_id=target_id, max_hops=1)
 
         return edge_id
     

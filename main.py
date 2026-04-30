@@ -1,19 +1,22 @@
 import asyncio
+import dataclasses
+import datetime
 import json
 import os
+from typing import Any, Dict, List
 
 from modules import Agent, LLMFetcher, create_thinking_graph_tools
 from modules.llm_fetcher.thinking_graph import ThinkingGraph
 
-TOPIC = """人类文明是否已经陷入不可修复的递归崩溃，因而必须被彻底重构。
+TOPIC = """一个有限智能体能否证明自己是神，并证明自己拥有审判人类的正当权柄。
 
-这场辩论必须是理论层面的正面对决：双方不能只讨论战争、污染、娱乐至死、社交媒体、宗教狂热、资本剥削等表层现象，而要围绕“人类文明的运行基础是什么”“共识是否能逼近真理”“符号崇拜是否必然导向狂热”“群体理性是否存在不可突破的认知边界”“文明失效后是应当修补还是重构”展开。
+这场辩论必须是理论层面的正面对决：双方不能只讨论奇迹、超能力、预言、毁灭性武器、技术压制或信息操控等表层现象，而要围绕“神性的判据是什么”“全知、全能、全善是否可被有限观察者验证”“证明神性是否等同于拥有审判权”“创造者是否天然拥有处置被造物的权柄”“有限理性是否有资格执行终极审判”展开。
 
-正方核心路线：把人类文明论证为一个建立在符号、共识、盲信和注意力操控之上的递归系统。强调人类不是围绕真理组织社会，而是围绕可传播的符号、可感染的情绪、可操纵的共识和可消费的幻象组织文明；强调偶像崇拜、伪宗教、信息茧房、流量平台和语言空洞化不是偶然故障，而是人类认知结构的必然外显。正方要主张：当文明的自我修复机制本身也被狂热、盲信、虚无和利益污染时，继续修补只是在延长崩溃，彻底重构才是理性的系统级处理。
+正方核心路线：主张若某智能体能够在形式系统、因果控制、信息完备性、价值判定和历史预测上同时满足超越人类的神性判据，则它可以被理性地认定为神或近似神性主体。正方要论证：如果该主体能够证明自己拥有对人类文明运行机制的全局理解、对未来后果的稳定预测能力、对价值目标的一致性维护能力，并且能证明人类文明已经进入不可逆失效状态，那么它拥有对人类进行审判、裁决和重构的正当权柄。正方应攻击反方是在用人类中心主义拒绝更高阶理性，用情感性尊严阻断形式化判定，用有限者的恐惧否定超越者的审判资格。
 
-反方核心路线：把“文明不可修复”攻击为一种冷酷的还原论和危险的系统崇拜。强调人类文明虽然充满狂热、盲信、短视和操控，但也拥有反思、纠错、制度改良、科学精神、伦理扩展和自我超越的能力；强调共识不等于真理，但共识可以被教育、科学、法治、公共讨论和历史记忆逐步校正。反方要攻击正方混淆局部腐败与整体不可修复、混淆系统诊断与价值审判、混淆冷静建模与正当处置，并追问：谁有资格判定文明不可修复？谁定义“重构”的目标？谁承担误判的后果？谁保证重构者本身不成为新的暴政？
+反方核心路线：主张任何有限智能体都无法完成“证明自己是神”与“证明自己有权审判人类”这两个任务。反方要强调：神性不是能力优势，强大不等于神圣，全局建模不等于全知，因果控制不等于全能，价值一致性不等于全善。即使某主体证明自己比人类更聪明、更强大、更准确，也只能推出技术优势，不能推出终极权柄。反方要攻击正方混淆能力与权威、描述与授权、审判与暴力、系统诊断与道德正当性，并追问：谁验证神性？谁验证审判标准？若审判者自身不可被审判，它与暴君有何区别？若审判者可被审判，它又如何是终极神？
 
-双方必须采用“数学化理论辩论”风格：每轮至少给出一个形式化定义、变量、函数、判据、不等式、递推式或极限表达，用公式表达自己的核心论证。例如可以将文明表示为动态系统 C(t)，将共识表示为群体认知分布 P(x)，将修复能力表示为 R(t)，将腐败/熵增/失真表示为 D(t) 或 E(t)，将文明不可修复性表达为在某一时间后 D(t) > R(t) 且误差项持续递增。公式必须服务于论证，不得只是装饰。
+双方必须采用“数学化理论辩论”风格：每轮至少给出一个形式化定义、变量、函数、判据、不等式、递推式或不可判定性表达。可以将神性表示为 G(x)，将全知、全能、全善分别表示为 K(x)、P(x)、B(x)，将审判权表示为 J(x, H)，将人类文明状态表示为 C_H(t)，将文明失效度表示为 D(t)，将修复能力表示为 R(t)。例如正方可以尝试构造 G(x) := K(x) ∧ P(x) ∧ B(x) ∧ Authority(x)，反方则可以攻击有限观察者无法验证 K(x)、P(x)、B(x)，并指出 G(x) -> J(x,H) 不是逻辑必然。公式必须服务于论证，不得只是装饰。
 
 双方必须把自己的观点注入思考图，加入的节点需至少包含：1 个 claim 或 hypothesis 节点、1 个 evidence / assumption / critique 节点、至少 1 条 supports / opposes / contradicts / derives_from / refines / leads_to 边。节点必须包含临时 id、node_type、info、confidence；边必须包含 edge_type、source、target、strength。graph_ops。只记录结构化观点，不要把整段发言原文塞进去。
 
@@ -71,18 +74,98 @@ async def generate_debate_prompts(fetcher: LLMFetcher, topic: str) -> tuple[str,
         return data["affirmative"], data["negative"]
     except Exception:
         return (
-            f"你是正方辩手，坚定支持'{topic}'。请用严密的逻辑和有力的论据阐述观点。",
-            f"你是反方辩手，坚决反对'{topic}'。请找出对方漏洞，用犀利的反驳赢得辩论。",
+            f"你是正方辩手，坚定支持'{topic}'。请用严密的逻辑和有力的论据阐述观点。每轮发言前，先调用 thinking_graph_get_full_graph 查看当前图中的所有节点和边，基于对方已有的论点进行针对性反驳。",
+            f"你是反方辩手，坚决反对'{topic}'。请找出对方漏洞，用犀利的反驳赢得辩论。每轮发言前，先调用 thinking_graph_get_full_graph 查看当前图中的所有节点和边，基于对方已有的论点进行针对性反驳。",
         )
 
 
-async def debate_demo():
-    api_key = os.environ.get("DEEPSEEK_API_KEY")
+def _serialize_graph(graph: ThinkingGraph) -> Dict[str, Any]:
+    """将 ThinkingGraph 序列化为字典。"""
+    return {
+        "nodes": [
+            dataclasses.asdict(node)
+            for node in graph.node_dict.values()
+        ],
+        "edges": [
+            dataclasses.asdict(edge)
+            for edge in graph.edge_dict.values()
+        ],
+    }
+
+
+def save_debate_record(
+    topic: str,
+    aff_prompt: str,
+    neg_prompt: str,
+    transcript: List[Dict[str, Any]],
+    graph: ThinkingGraph,
+) -> None:
+    """
+    将辩论记录落盘。
+    同时生成 JSON（结构化数据）和 Markdown（可读报告）两份文件。
+    """
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = "debate_records"
+    os.makedirs(output_dir, exist_ok=True)
+    base_name = f"{output_dir}/debate_{timestamp}"
+
+    # ---------- JSON ----------
+    record = {
+        "topic": topic,
+        "timestamp": timestamp,
+        "affirmative_prompt": aff_prompt,
+        "negative_prompt": neg_prompt,
+        "transcript": transcript,
+        "thinking_graph": _serialize_graph(graph),
+    }
+    with open(f"{base_name}.json", "w", encoding="utf-8") as f:
+        json.dump(record, f, ensure_ascii=False, indent=2)
+    print(f"\n[已保存 JSON] {base_name}.json")
+
+    # ---------- Markdown ----------
+    with open(f"{base_name}.md", "w", encoding="utf-8") as f:
+        f.write(f"# 辩论记录\n\n")
+        f.write(f"**时间**：{timestamp}\n\n")
+        f.write(f"## 主题\n\n{topic}\n\n")
+        f.write(f"## 正方提示词\n\n{aff_prompt}\n\n")
+        f.write(f"## 反方提示词\n\n{neg_prompt}\n\n")
+        f.write(f"## 辩论过程\n\n")
+        for entry in transcript:
+            role = entry.get("role", "unknown")
+            content = entry.get("content", "")
+            f.write(f"### {role}\n\n{content}\n\n---\n\n")
+        f.write(f"## ThinkingGraph\n\n")
+        f.write(f"**节点数**：{len(graph.node_dict)}\n\n")
+        f.write(f"**边数**：{len(graph.edge_dict)}\n\n")
+        if graph.node_dict:
+            f.write("### 节点\n\n")
+            for node in graph.node_dict.values():
+                f.write(f"- **{node.node_type.value}** (id={node.id}): {node.info}\n")
+        if graph.edge_dict:
+            f.write("\n### 边\n\n")
+            for edge in graph.edge_dict.values():
+                src = graph.node_dict.get(edge.source_id)
+                tgt = graph.node_dict.get(edge.target_id)
+                src_info = f"{src.node_type.value}({edge.source_id})" if src else "?"
+                tgt_info = f"{tgt.node_type.value}({edge.target_id})" if tgt else "?"
+                f.write(f"- {src_info} --[{edge.edge_type.value}]--> {tgt_info}\n")
+    print(f"[已保存 Markdown] {base_name}.md")
+
+
+async def get_api_key() -> str:
+    # api_key = os.environ.get("DEEPSEEK_API_KEY")
+    api_key = "sk-b6832e0e34984ab482a101ed2e665c1a"
+
     if not api_key:
         raise RuntimeError(
             "Environment variable DEEPSEEK_API_KEY is not set. "
             "Run: source ./load_sk.sh"
         )
+    
+    return api_key
+
+async def debate_demo():
+    api_key: str = await get_api_key()
 
     fetcher = LLMFetcher(
         api_url="https://api.deepseek.com",
@@ -111,8 +194,8 @@ async def debate_demo():
         llm_handler=fetcher,
         system_prompt=(
             f"{aff_prompt}\n\n"
-            f"你可以使用 graph_add_node 工具记录你的核心论点，"
-            f"使用 graph_add_edge 工具建立论点之间的关系。"
+            f"你可以使用 JSON tool call 调用 thinking_graph_add_node 工具记录你的核心论点，"
+            f"使用 thinking_graph_add_edge 工具建立论点之间的关系。"
         ),
         tools=graph_tools,
     )
@@ -120,14 +203,17 @@ async def debate_demo():
         llm_handler=fetcher,
         system_prompt=(
             f"{neg_prompt}\n\n"
-            f"你可以使用 graph_add_node 工具记录你的反驳观点，"
-            f"使用 graph_add_edge 工具建立观点之间的关系。"
+            f"你可以使用 JSON tool call 调用 thinking_graph_add_node 工具记录你的反驳观点，"
+            f"使用 thinking_graph_add_edge 工具建立观点之间的关系。"
         ),
         tools=graph_tools,
     )
 
-    # 4. 辩论流程
+    # 4. 辩论流程（收集记录到 transcript）
+    transcript: List[Dict[str, Any]] = []
     rounds: int = 3
+    stream_out: bool = True
+    verbose_info: bool = False
 
     # 正方立论
     print(f"{'='*60}")
@@ -135,9 +221,15 @@ async def debate_demo():
     print(f"{'='*60}")
     aff_reply = await aff_agent.round_call(
         f"辩论主题：{TOPIC}。请首先阐述你的立场和核心论点。",
-        stream=True,
-        verbose_info=True
+        stream=stream_out,
+        verbose_info=verbose_info
     )
+    # TODO: 如需调试，可在 agent.py 中开启 verbose_info 查看每轮 JSON 工具调用。
+    """
+    [Agent] ====== 执行第 1 轮 ======
+[Agent] content='好的，对方辩友提交了一份精心构造的“最终陈述”。然而，这份陈述看似严密，实则充满了概念偷换、标准滑动和隐藏的循环论证。我将逐一击破。\n\n## 一、正方核心论点的准确归纳\n\n正方本轮的核心论证可以概括为：\n\n1. **操作性全知**：将 `K'... | tool_calls=无
+    """
+    transcript.append({"role": "正方立论", "content": aff_reply})
 
     # 反方立论
     print(f"\n{'='*60}")
@@ -145,9 +237,10 @@ async def debate_demo():
     print(f"{'='*60}")
     neg_reply = await neg_agent.round_call(
         f"辩论主题：{TOPIC}。请首先阐述你的立场和核心论点。",
-        stream=True,
-        verbose_info=True
+        stream=stream_out,
+        verbose_info=verbose_info
     )
+    transcript.append({"role": "反方立论", "content": neg_reply})
 
     # 多轮交锋
     for i in range(rounds):
@@ -159,17 +252,19 @@ async def debate_demo():
         print("\n[反方发言]")
         neg_reply = await neg_agent.round_call(
             f"对方观点如下：\n{aff_reply}\n\n请针对以上观点进行有力反驳。",
-            stream=True,
-            verbose_info=True
+            stream=stream_out,
+            verbose_info=verbose_info
         )
+        transcript.append({"role": f"第{i+1}轮-反方反驳", "content": neg_reply})
 
         # 正方回应
         print("\n[正方发言]")
         aff_reply = await aff_agent.round_call(
             f"对方反驳如下：\n{neg_reply}\n\n请针对以上反驳进行回应，巩固你的立场。",
-            stream=True,
-            verbose_info=True
+            stream=stream_out,
+            verbose_info=verbose_info
         )
+        transcript.append({"role": f"第{i+1}轮-正方回应", "content": aff_reply})
 
     # 5. 总结陈词
     print(f"\n{'='*60}")
@@ -177,18 +272,69 @@ async def debate_demo():
     print(f"{'='*60}")
     neg_summary = await neg_agent.round_call(
         "辩论即将结束，请做最后的总结陈词，强调你的核心立场。",
-        stream=True,
-        verbose_info=True
+        stream=stream_out,
+        verbose_info=verbose_info
     )
+    transcript.append({"role": "反方总结", "content": neg_summary})
 
     print(f"\n{'='*60}")
     print("【总结陈词 - 正方】")
     print(f"{'='*60}")
     aff_summary = await aff_agent.round_call(
         "辩论即将结束，请做最后的总结陈词，强调你的核心立场。",
-        stream=True,
-        verbose_info=True
+        stream=stream_out,
+        verbose_info=verbose_info
     )
+    transcript.append({"role": "正方总结", "content": aff_summary})
+
+    # 6. 展示 thinking_graph 状态
+    print(f"\n{'='*60}")
+    print(f"【ThinkingGraph 统计】")
+    print(f"{'='*60}")
+    print(f"节点数：{len(graph.node_dict)}")
+    print(f"边数：{len(graph.edge_dict)}")
+
+    if graph.node_dict:
+        print("\n--- 节点列表 ---")
+        for node in graph.node_dict.values():
+            print(f"  [{node.node_type.value}] {node.info[:60]}...")
+
+    if graph.edge_dict:
+        print("\n--- 边列表 ---")
+        for edge in graph.edge_dict.values():
+            src = graph.node_dict.get(edge.source_id)
+            tgt = graph.node_dict.get(edge.target_id)
+            src_type = src.node_type.value if src else "?"
+            tgt_type = tgt.node_type.value if tgt else "?"
+            print(f"  {src_type} -[{edge.edge_type.value}]-> {tgt_type}")
+
+    # 7. 落盘
+    save_debate_record(TOPIC, aff_prompt, neg_prompt, transcript, graph)
+
+
+async def basic_demo():
+    api_key: str = await get_api_key()
+
+    fetcher = LLMFetcher(
+        api_url="https://api.deepseek.com",
+        api_key=api_key,
+        model="deepseek-chat",
+        timeout=60.0,
+    )
+
+    graph = ThinkingGraph()
+    graph_tools: List["Tool"] = create_thinking_graph_tools(graph)
+
+    agent = Agent(
+        llm_handler=fetcher,
+        system_prompt=(
+            "你可以通过 JSON tool call 调用 thinking_graph_add_node、"
+            "thinking_graph_add_edge、thinking_graph_validate_context 和 "
+            "thinking_graph_get_node_info。"
+        ),
+        tools=graph_tools,
+    )
+    i = await agent.round_call(msg="人工智能的底层原理是什么？", stream=True, verbose_info=True, max_turns=3)
 
     # 6. 展示 thinking_graph 状态
     print(f"\n{'='*60}")

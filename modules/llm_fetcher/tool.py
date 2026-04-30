@@ -46,7 +46,7 @@ class ToolRegistry:
 
     @property
     def schemas(self) -> List[Dict[str, Any]]:
-        """OpenAI-compatible 'tools' list for LLM requests."""
+        """Return tool metadata for prompt injection or future adapters."""
         return [
             {
                 "type": "function",
@@ -67,9 +67,11 @@ class ToolRegistry:
         lines: List[str] = [
             "",
             "=== AVAILABLE TOOLS ===",
-            "To call a tool, emit a JSON object in your response with exactly these two fields:",
-            '  "tool": "<tool_name>",',
-            '  "arguments": {<key>: <value>, ...}',
+            "When you need a tool, respond with ONE valid JSON object and nothing else.",
+            "Use one of these shapes:",
+            '  {"tool": "<tool_name>", "arguments": {<key>: <value>, ...}}',
+            '  {"tool_calls": [{"tool": "<tool_name>", "arguments": {...}}, ...]}',
+            "If you do not need any tool, answer normally in natural language.",
             ""
         ]
         for t in self._tools.values():
