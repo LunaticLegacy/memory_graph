@@ -28,4 +28,11 @@ from .llm_fetcher.swarm import (
     OutputNode,
     RouterNode,
     ToolNode,
+    AgentSwarm,
+    SwarmSpec,
+    RuntimeSlotManager,
+    RuntimeSlot,
+    SlotStatus,
 )
+
+from .llm_fetcher.tools.obscura_tools import create_obscura_tools

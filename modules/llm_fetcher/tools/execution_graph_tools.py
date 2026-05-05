@@ -1,10 +1,14 @@
 """将 ExecutionGraph 的操作封装为 Tool，供 Agent 在运行时动态修改图结构。"""
 
-from typing import Any, Dict, List, Optional
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ..agent import Agent
 from ..tool import Tool
-from ..swarm.execution_graph import ExecutionGraph
+
+if TYPE_CHECKING:
+    from ..swarm.execution_graph import ExecutionGraph
 
 
 def create_execution_graph_tools(graph: ExecutionGraph) -> List[Tool]:

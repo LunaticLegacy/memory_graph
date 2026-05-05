@@ -154,9 +154,8 @@ def save_debate_record(
 
 
 async def get_api_key() -> str:
-    # api_key = os.environ.get("DEEPSEEK_API_KEY")
-    api_key = "sk-b6832e0e34984ab482a101ed2e665c1a"
-
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    
     if not api_key:
         raise RuntimeError(
             "Environment variable DEEPSEEK_API_KEY is not set. "

@@ -27,8 +27,7 @@ from modules.llm_fetcher.thinking_graph import ThinkingGraph
 
 
 async def get_api_key() -> str:
-    # api_key = os.environ.get("DEEPSEEK_API_KEY")
-    api_key = "sk-b6832e0e34984ab482a101ed2e665c1a"
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
     if not api_key:
         raise RuntimeError("DEEPSEEK_API_KEY not set")
     return api_key
@@ -390,9 +389,9 @@ async def demo_parallel_pipeline():
 async def main():
     # 按需取消注释以运行不同示例
     await demo_simple_pipeline()
-    # await demo_static_graph()
-    # await demo_dynamic_graph()
-    # await demo_parallel_pipeline()
+    await demo_static_graph()
+    await demo_dynamic_graph()
+    await demo_parallel_pipeline()
 
 
 if __name__ == "__main__":
