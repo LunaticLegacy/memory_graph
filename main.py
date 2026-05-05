@@ -62,9 +62,10 @@ async def generate_debate_prompts(fetcher: LLMFetcher, topic: str) -> tuple[str,
         f"2. 不要写成模板说明，要直接写成可用的 system prompt。\n"
         f"3. 提示词中要要求辩手逐点回应对方上一轮核心主张，避免空泛重复。\n"
         f"4. 提示词中要要求辩手使用“先归纳对方理论核心，再指出其根本漏洞，再提出己方更高层框架”的攻防结构。\n"
-        f"5. 不要让辩手声称自己会调用工具、记录节点、写入图结构，除非用户明确要求。\n"
-        f"6. 直接输出 JSON：{{\"affirmative\": \"...\", \"negative\": \"...\"}}\n"
-        f"7. 不要输出任何解释文字，只输出 JSON。"
+        f"5. 必须要求辩手在每一轮发言前先调用 thinking_graph_get_full_graph 查看当前思考图。\n"
+        f"6. 必须要求辩手把本轮核心论点通过 thinking_graph_add_node 写入思考图，并用 thinking_graph_add_edge 建立关系。\n"
+        f"7. 直接输出 JSON：{{\"affirmative\": \"...\", \"negative\": \"...\"}}\n"
+        f"8. 不要输出任何解释文字，只输出 JSON。"
     )
 
     response = await fetcher.fetch(msg=prompt, max_tokens=1024, temperature=0.7)
@@ -74,8 +75,8 @@ async def generate_debate_prompts(fetcher: LLMFetcher, topic: str) -> tuple[str,
         return data["affirmative"], data["negative"]
     except Exception:
         return (
-            f"你是正方辩手，坚定支持'{topic}'。请用严密的逻辑和有力的论据阐述观点。每轮发言前，先调用 thinking_graph_get_full_graph 查看当前图中的所有节点和边，基于对方已有的论点进行针对性反驳。",
-            f"你是反方辩手，坚决反对'{topic}'。请找出对方漏洞，用犀利的反驳赢得辩论。每轮发言前，先调用 thinking_graph_get_full_graph 查看当前图中的所有节点和边，基于对方已有的论点进行针对性反驳。",
+            f"你是正方辩手，坚定支持'{topic}'。请用严密的逻辑和有力的论据阐述观点。每轮发言前，必须先调用 thinking_graph_get_full_graph 查看当前图中的所有节点和边；随后必须用 thinking_graph_add_node 将本轮核心论点写入思考图，并用 thinking_graph_add_edge 连接到已有论点；再基于对方已有的论点进行针对性反驳。",
+            f"你是反方辩手，坚决反对'{topic}'。请找出对方漏洞，用犀利的反驳赢得辩论。每轮发言前，必须先调用 thinking_graph_get_full_graph 查看当前图中的所有节点和边；随后必须用 thinking_graph_add_node 将本轮核心反驳写入思考图，并用 thinking_graph_add_edge 连接到已有论点；再基于对方已有的论点进行针对性反驳。",
         )
 
 
@@ -194,8 +195,8 @@ async def debate_demo():
         llm_handler=fetcher,
         system_prompt=(
             f"{aff_prompt}\n\n"
-            f"你可以使用 JSON tool call 调用 thinking_graph_add_node 工具记录你的核心论点，"
-            f"使用 thinking_graph_add_edge 工具建立论点之间的关系。"
+            f"你必须先调用 thinking_graph_get_full_graph 查看当前思考图，再使用 JSON tool call 调用 thinking_graph_add_node 记录你的核心论点，"
+            f"并使用 thinking_graph_add_edge 工具建立论点之间的关系。"
         ),
         tools=graph_tools,
     )
@@ -203,17 +204,17 @@ async def debate_demo():
         llm_handler=fetcher,
         system_prompt=(
             f"{neg_prompt}\n\n"
-            f"你可以使用 JSON tool call 调用 thinking_graph_add_node 工具记录你的反驳观点，"
-            f"使用 thinking_graph_add_edge 工具建立观点之间的关系。"
+            f"你必须先调用 thinking_graph_get_full_graph 查看当前思考图，再使用 JSON tool call 调用 thinking_graph_add_node 记录你的反驳观点，"
+            f"并使用 thinking_graph_add_edge 工具建立观点之间的关系。"
         ),
         tools=graph_tools,
     )
 
     # 4. 辩论流程（收集记录到 transcript）
     transcript: List[Dict[str, Any]] = []
-    rounds: int = 3
+    rounds: int = 15
     stream_out: bool = True
-    verbose_info: bool = False
+    verbose_info: bool = True
 
     # 正方立论
     print(f"{'='*60}")

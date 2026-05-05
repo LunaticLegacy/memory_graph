@@ -9,6 +9,7 @@ from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from .llm_fetcher import LLMFetcher
 from .llm_context import LLMContext, LLMContextHandler, LLMContextPair
 from .tool import Tool, ToolRegistry
+from .tools.builtin_tools import create_builtin_tools
 
 
 # ---------------------------------------------------------------------------
@@ -48,26 +49,8 @@ class Agent:
 
     def _register_builtin_tools(self) -> None:
         """注册 Agent 内嵌的元工具，用于控制对话轮次的生命周期。"""
-
-        async def _round_end(**kwargs: object) -> str:
-            """结束当前 round_call。"""
-            return "Round ended."
-
-        self.tool_registry.register(
-            Tool(
-                name="round_end",
-                description=(
-                    "结束当前轮次。当你认为已经完成了本轮所有必要的思考、"
-                    "工具调用和论点记录后，调用此工具来明确结束本轮对话。"
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {},
-                    "required": [],
-                },
-                handler=_round_end,
-            )
-        )
+        for tool in create_builtin_tools():
+            self.tool_registry.register(tool)
 
     @property
     def system_prompt(self) -> str:
@@ -77,6 +60,18 @@ class Agent:
         if hint:
             prompt = f"{prompt}\n{hint}"
         return prompt
+
+    def update_system_prompt(self, new_prompt: str) -> None:
+        """运行时动态修改 Agent 的系统提示词。"""
+        self._base_system_prompt = new_prompt
+
+    def add_tool(self, tool: "Tool") -> None:
+        """运行时给 Agent 增加一个工具。"""
+        self.tool_registry.register(tool)
+
+    def remove_tool(self, tool_name: str) -> None:
+        """运行时从 Agent 移除一个工具。"""
+        self.tool_registry.unregister(tool_name)
 
     async def round_call(
         self,

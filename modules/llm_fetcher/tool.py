@@ -14,10 +14,15 @@ class Tool:
     handler: Callable[..., Any]  # sync or async callable
 
     async def execute(self, **kwargs: Any) -> Any:
-        """Invoke the tool handler, awaiting if necessary."""
+        """
+        Invoke the tool handler, awaiting if necessary.
+
+        要求所有工具均使用异步模式。
+        """
         if asyncio.iscoroutinefunction(self.handler):
             return await self.handler(**kwargs)
-        return self.handler(**kwargs)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: self.handler(**kwargs))
 
 
 class ToolRegistry:
@@ -32,6 +37,12 @@ class ToolRegistry:
             raise ValueError(f"Tool '{tool.name}' is already registered.")
         self._tools[tool.name] = tool
         return tool
+
+    def unregister(self, name: str) -> Tool:
+        """Unregister a tool by name. Returns the removed tool."""
+        if name not in self._tools:
+            raise KeyError(f"Tool '{name}' is not registered.")
+        return self._tools.pop(name)
 
     def get(self, name: str) -> Tool:
         """Retrieve a registered tool by name."""
